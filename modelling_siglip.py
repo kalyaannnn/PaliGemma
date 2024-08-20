@@ -186,9 +186,6 @@ class SiglipVisionTransformer(nn.Module):
 
         last_hidden_state = self.post_layernorm(last_hidden_state)
 
-
-
-
 class SiglipVisionModel(nn.Module):
     def __init__(self, config : SiglipVisionConfig):
         super().__init__()
