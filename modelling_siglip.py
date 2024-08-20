@@ -113,17 +113,25 @@ class SiglipAttention(nn.Module):
         
         # Applying the softmax row wise, attention weights : [Batch Size, Num_Heads, Num_Patches, Num_Patches]
         attn_weights = nn.functional.softmax(attn_weights, dim = -1, dtype = torch.float32).to(query_states.dtype)
-        # Multiply the attention weights by the value states
+        # Apply deroput during training
+        attn_weights = nn.functional.dropout(attn_weights, p = self.dropout, training = self.training)
+        # Multiply the attention states with the value states Attention Output -> [Batch_Size, Num_Heads, Num_Patches, Head_Dim]
+        attn_output = torch.matmul(attn_weights, value_states)
 
+        if attn_output.size() != (batch_size, self.num_heads, seq_len, self.head_dim):
+            raise ValueError(
+                    f"Attention Output shoule be of size {(batch_size, self.num_heads, seq_len, self.head_dims)}, but is"
+                    f"{attn_output.size()}"
+            )
 
+        # [Batch Size, Num_Patches, Num_Heads, Head_Dim] -> [Batch_Size, Num_Patches, Num_Heads, Head_Dim]
+        attn_output = attn_output.transpose(1, 2).contiguous
+        # [Batch_Size, Num_Patches, Num_Heads, Head_Dim] -> [Batch_Size, Num_Patches, Embed_Dim]
+        attn_output = attn_output.reshape(batch_size, seq_len, self.embed_dim)
+        # [Batch_Size, Num_Patches, Embed_Dim]
+        attn_output = self.out_proj(attn_output)
 
-
-
-
-
-
-
-
+        return attn_output, attn_weights
 
 
 
@@ -168,6 +176,24 @@ class SiglipEncoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states) # More degrees of freedom to learn for the model and prepare a sequence of batches to a next layer while adding non-linearity
 
 
+class SiglipEncoder(nn.Module):
+    def __init__(self, config : SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        embed_dim = config.hidden_size
+        self.layers = nn.ModuleList(
+            [SiglipEncoderLayer(config) for _ in range(config.num_hidden_layers)]
+        )
+
+    def forward(self, input_embeds : torch.Tensor) -> torch.Tensor:
+        # Input Embeds -> [Batch_Size, Num_Patches, Embed_Dim]
+        hidden_states = input_embeds
+
+        for encoder_layer in self.layers:
+            # [Batch_Size, Num_Patches, Embed_Dim] -> [Batch_Size, Num_Patches, Embed_Dim]
+            hidden_states = encoder_layer(hidden_states)
+        return hidden_states
+
 class SiglipVisionTransformer(nn.Module):
     def __init__(self, config : SiglipVisionConfig):
         super().__init__()
@@ -175,7 +201,7 @@ class SiglipVisionTransformer(nn.Module):
         embed_dim = config.hidden_size # Size of the embedding vector
 
         self.embeddings = SiglipVisionEmbedding(config) # Extract the patches of images using this layer
-        self.encoder = SiglipVisionEncoder(config) # Run it through a list of layers of transformers
+        self.encoder = SiglipEncoder(config) # Run it through a list of layers of transformers
         self.post_layernorm = nn.LayerNorm(embed_dim, eps = config.layer_norm_eps)
 
     def forward(self, pixel_values : torch.Tensor) -> torch.Tensor:
